@@ -17,10 +17,31 @@ motion_filter:
   temporal_frames: 5               # 연속 분석 프레임 수
   pixel_change_threshold: 0.15     # 픽셀 변화율 (15%)
 
+# 연기 감지 필터
+smoke_filter:
+  saturation_max: 60           # 연기의 최대 채도 (회색~흰색)
+  value_min: 80                # 연기의 최소 밝기
+  value_max: 220               # 연기의 최대 밝기
+  min_area: 500                # 최소 연기 면적 (px)
+  max_area: 100000             # 최대 연기 면적 (px)
+  edge_density_max: 0.15       # 에지 밀도 상한 (연기는 경계가 부드러움)
+  expansion_threshold: 0.1     # 확산 판정 임계값 (10% 이상 면적 증가)
+
 # 형태 분석 3차 필터
 shape_filter:
   irregularity_threshold: 20       # 경계선 불규칙성 지수
   vertical_expansion_rate: 0.2     # 수직 확장 비율 (20%)
+
+# YOLOv8 검증 필터 (5차 필터)
+yolo_filter:
+  enabled: true                      # false로 설정 시 기존 4필터만 사용
+  model_path: "models/yolov8n-fire.pt"  # 화재 학습된 YOLOv8 모델 경로
+  confidence_threshold: 0.35         # YOLO 검출 최소 신뢰도
+  frame_interval: 3                  # N프레임마다 1회 추론 (GPU 사용 중)
+  input_size: 320                    # YOLO 입력 해상도 (320=최고속, 640=최고정확도)
+  fire_boost_max: 25.0               # YOLO 화재 확인 시 최대 가산점
+  smoke_boost_max: 10.0              # YOLO 연기 확인 시 최대 가산점
+  no_detect_penalty: 0.75            # YOLO 미검출 시 기존 점수 감쇠 비율
 
 # 최종 판정
 detection:

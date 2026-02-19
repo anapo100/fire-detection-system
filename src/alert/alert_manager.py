@@ -21,10 +21,20 @@ class AlertManager:
         self.notifier = Notifier(config)
 
         levels_cfg = config.get("alert", {}).get("levels", {})
+        warning_cfg = levels_cfg.get("warning", {})
+        alert_cfg = levels_cfg.get("alert", {})
+        critical_cfg = levels_cfg.get("critical", {})
+
+        self.level_enabled = {
+            "warning": bool(warning_cfg.get("enabled", True)),
+            "alert": bool(alert_cfg.get("enabled", True)),
+            "critical": bool(critical_cfg.get("enabled", True)),
+        }
+
         self.level_actions = {
-            "warning": levels_cfg.get("warning", {}).get("actions", ["log"]),
-            "alert": levels_cfg.get("alert", {}).get("actions", ["log", "slack", "snapshot"]),
-            "critical": levels_cfg.get("critical", {}).get(
+            "warning": warning_cfg.get("actions", ["log"]),
+            "alert": alert_cfg.get("actions", ["log", "slack", "snapshot"]),
+            "critical": critical_cfg.get(
                 "actions", ["log", "slack", "email", "sound", "video"]
             ),
         }
@@ -39,6 +49,12 @@ class AlertManager:
         """감지 결과에 따른 알림 액션을 실행한다."""
         if level == "normal":
             self.event_logger.log_event(confidence, level)
+            return
+
+        if not self.level_enabled.get(level, True):
+            self.event_logger.log_event(
+                confidence, level, " - 레벨 비활성화로 알림 액션 생략"
+            )
             return
 
         actions = self.level_actions.get(level, ["log"])

@@ -29,9 +29,16 @@ class Visualizer:
         contours: list,
         level: str,
         confidence: float,
+        yolo_detections: list = None,
+        copy: bool = True,
     ) -> np.ndarray:
-        """감지 결과를 프레임에 표시한다."""
-        display = frame.copy()
+        """감지 결과를 프레임에 표시한다.
+
+        Args:
+            yolo_detections: YOLO 검출 결과 리스트 [{class, confidence, bbox}, ...]
+            copy: True면 복사본에 그림, False면 원본에 직접 그림
+        """
+        display = frame.copy() if copy else frame
         color = self.COLORS.get(level, (255, 255, 255))
 
         # 감지된 영역에 컨투어 그리기
@@ -42,6 +49,21 @@ class Visualizer:
                 x, y, w, h = cv2.boundingRect(cnt)
                 cv2.rectangle(display, (x, y), (x + w, y + h), color, 2)
 
+        # YOLO 검출 박스 그리기
+        if yolo_detections:
+            for det in yolo_detections:
+                x1, y1, x2, y2 = [int(v) for v in det["bbox"]]
+                cls_name = det["class"]
+                conf = det["confidence"]
+                # 시안(화재), 마젠타(연기)
+                det_color = (255, 255, 0) if cls_name in ("fire", "flame") else (255, 0, 255)
+                cv2.rectangle(display, (x1, y1), (x2, y2), det_color, 2)
+                label = f"YOLO:{cls_name} {conf:.0%}"
+                cv2.putText(
+                    display, label, (x1, y1 - 5),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, det_color, 1,
+                )
+
         return display
 
     def draw_info_overlay(
@@ -51,20 +73,19 @@ class Visualizer:
         level: str,
         fps: float,
         latency: float,
-        phone_status: str = "",
     ) -> np.ndarray:
         """상태 정보 오버레이를 그린다."""
         if not self.show_info:
             return frame
 
-        display = frame.copy()
+        display = frame  # 복사 없이 직접 수정 (draw_detection에서 이미 복사됨)
         h, w = display.shape[:2]
         color = self.COLORS.get(level, (0, 255, 0))
 
-        # 상단 정보 바
-        overlay = display.copy()
-        cv2.rectangle(overlay, (0, 0), (w, 80), (0, 0, 0), -1)
-        cv2.addWeighted(overlay, 0.6, display, 0.4, 0, display)
+        # 상단 정보 바 (오버레이 영역만 부분 복사)
+        roi_overlay = display[0:80, 0:w].copy()
+        cv2.rectangle(roi_overlay, (0, 0), (w, 80), (0, 0, 0), -1)
+        cv2.addWeighted(roi_overlay, 0.6, display[0:80, 0:w], 0.4, 0, display[0:80, 0:w])
 
         # 상태 텍스트
         status_text = self._get_status_text(level)
@@ -86,16 +107,6 @@ class Visualizer:
             display, perf_text, (10, 70),
             cv2.FONT_HERSHEY_SIMPLEX, 0.4, (200, 200, 200), 1,
         )
-
-        # 스마트폰 상태 (우측 상단)
-        if phone_status:
-            text_size = cv2.getTextSize(
-                phone_status, cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1
-            )[0]
-            cv2.putText(
-                display, phone_status, (w - text_size[0] - 10, 25),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.4, (200, 200, 200), 1,
-            )
 
         # 화재 감지 시 경고 테두리
         if level in ("alert", "critical"):

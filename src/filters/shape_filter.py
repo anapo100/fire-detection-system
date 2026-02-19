@@ -38,9 +38,12 @@ class ShapeFilter:
             self._bbox_history.append(None)
             return 0.0
 
+        # 가장 큰 컨투어를 한 번만 계산하여 재사용
+        largest = max(contours, key=cv2.contourArea)
+
         irregularity_score = self._analyze_irregularity(contours)
-        expansion_score = self._analyze_vertical_expansion(contours)
-        gradient_score = self._analyze_color_gradient(contours, frame)
+        expansion_score = self._analyze_vertical_expansion(contours, largest)
+        gradient_score = self._analyze_color_gradient(largest, frame)
 
         total = irregularity_score + expansion_score + gradient_score
         return min(total, 30.0)
@@ -67,7 +70,7 @@ class ShapeFilter:
 
         return max(scores) if scores else 0.0
 
-    def _analyze_vertical_expansion(self, contours: list) -> float:
+    def _analyze_vertical_expansion(self, contours: list, largest: np.ndarray) -> float:
         """수직 확장 패턴을 추적한다.
 
         화염은 위로 번지는 특성이 있으므로 Bounding Box 높이 변화를 추적한다.
@@ -76,8 +79,7 @@ class ShapeFilter:
             self._bbox_history.append(None)
             return 0.0
 
-        # 가장 큰 컨투어의 바운딩 박스 추적
-        largest = max(contours, key=cv2.contourArea)
+        # 이미 계산된 가장 큰 컨투어 사용
         x, y, w, h = cv2.boundingRect(largest)
         self._bbox_history.append({"x": x, "y": y, "w": w, "h": h})
 
@@ -102,16 +104,12 @@ class ShapeFilter:
 
         return 0.0
 
-    def _analyze_color_gradient(self, contours: list, frame: np.ndarray) -> float:
+    def _analyze_color_gradient(self, largest: np.ndarray, frame: np.ndarray) -> float:
         """색상 분포 그라데이션을 분석한다.
 
         화재: 중심부(노랑) -> 외곽(빨강) 그라데이션
         조명: 균일한 색상 분포
         """
-        if not contours:
-            return 0.0
-
-        largest = max(contours, key=cv2.contourArea)
         x, y, w, h = cv2.boundingRect(largest)
 
         if w < 10 or h < 10:

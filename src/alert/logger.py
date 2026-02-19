@@ -2,6 +2,7 @@
 
 import os
 import logging
+from collections import deque
 from datetime import datetime
 from typing import Optional
 
@@ -22,7 +23,9 @@ class EventLogger:
         self.log_directory = log_cfg.get("log_directory", "logs/")
 
         self._video_writer: Optional[cv2.VideoWriter] = None
-        self._video_frames: list = []
+        # deque로 변경: maxlen 자동 관리로 pop(0)의 O(n) 비용 제거
+        max_buffer = self.video_duration * 15  # 15 FPS 기준
+        self._video_frames: deque = deque(maxlen=max_buffer)
         self._ensure_log_directory()
 
     def _ensure_log_directory(self):
@@ -54,11 +57,8 @@ class EventLogger:
         """비디오 녹화를 위해 프레임을 버퍼에 추가한다."""
         if not self.save_videos:
             return
-
-        max_buffer = self.video_duration * 15  # 15 FPS 기준
+        # deque의 maxlen이 자동으로 오래된 프레임을 제거
         self._video_frames.append(frame.copy())
-        if len(self._video_frames) > max_buffer:
-            self._video_frames.pop(0)
 
     def save_video(self, fps: int = 15) -> str:
         """버퍼에 저장된 프레임을 비디오로 저장한다."""
@@ -82,20 +82,36 @@ class EventLogger:
         self._video_frames.clear()
         return filepath
 
-    def log_event(self, confidence: float, level: str, details: str = ""):
+    def log_event(
+        self,
+        confidence: float,
+        level: str,
+        details: str = "",
+        flame_risk: float = 0.0,
+        smoke_risk: float = 0.0,
+        has_flame: bool = False,
+        has_smoke: bool = False,
+    ):
         """감지 이벤트를 로그에 기록한다."""
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        if level == "normal":
-            logger.info(f"[{timestamp}] 화재 미감지 (신뢰도: {confidence:.0f}%)")
-        elif level == "warning":
+
+        # 화염/연기 상태 태그
+        tags = []
+        if has_flame:
+            tags.append(f"flame:{flame_risk:.0f}")
+        if has_smoke:
+            tags.append(f"smoke:{smoke_risk:.0f}")
+        tag_str = f" [{'+'.join(tags)}]" if tags else ""
+
+        if level == "warning":
             logger.warning(
-                f"[{timestamp}] 화재 경계 (신뢰도: {confidence:.0f}%) {details}"
+                f"[{timestamp}] 화재 경계 (신뢰도: {confidence:.0f}%){tag_str} {details}"
             )
         elif level == "alert":
             logger.warning(
-                f"[{timestamp}] 화재 의심 감지! (신뢰도: {confidence:.0f}%) {details}"
+                f"[{timestamp}] 화재 의심 감지! (신뢰도: {confidence:.0f}%){tag_str} {details}"
             )
         elif level == "critical":
             logger.critical(
-                f"[{timestamp}] 화재 감지 확정! (신뢰도: {confidence:.0f}%) {details}"
+                f"[{timestamp}] 화재 감지 확정! (신뢰도: {confidence:.0f}%){tag_str} {details}"
             )

@@ -35,6 +35,12 @@ class ColorFilter:
         self.min_area = cf_cfg.get("min_area", 300)
         self.max_area = cf_cfg.get("max_area", 50000)
 
+        # 모폴로지 커널 캐싱 (매 프레임마다 생성하지 않음)
+        self._morph_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+        # 필터 임계값 상수
+        self._min_saturation = 120
+        self._max_aspect_ratio = 3.0
+
     def analyze(self, frame: np.ndarray) -> Tuple[float, np.ndarray, list]:
         """프레임에서 화염 색상을 검출한다.
 
@@ -55,10 +61,9 @@ class ColorFilter:
             mask = cv2.inRange(hsv, lower, upper)
             combined_mask = cv2.bitwise_or(combined_mask, mask)
 
-        # 모폴로지 연산으로 노이즈 제거
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-        combined_mask = cv2.morphologyEx(combined_mask, cv2.MORPH_OPEN, kernel)
-        combined_mask = cv2.morphologyEx(combined_mask, cv2.MORPH_CLOSE, kernel)
+        # 모폴로지 연산으로 노이즈 제거 (캐싱된 커널 사용)
+        combined_mask = cv2.morphologyEx(combined_mask, cv2.MORPH_OPEN, self._morph_kernel)
+        combined_mask = cv2.morphologyEx(combined_mask, cv2.MORPH_CLOSE, self._morph_kernel)
 
         # 컨투어 추출 및 필터링
         contours, _ = cv2.findContours(
@@ -74,14 +79,14 @@ class ColorFilter:
             # 종횡비 검사 (LED 조명 같은 가로로 긴 형태 제외)
             x, y, w, h = cv2.boundingRect(cnt)
             aspect_ratio = w / max(h, 1)
-            if aspect_ratio > 3:
+            if aspect_ratio > self._max_aspect_ratio:
                 continue
 
             # Saturation 검사 (반사광 제외)
             roi_hsv = hsv[y : y + h, x : x + w]
             if roi_hsv.size > 0:
                 mean_sat = np.mean(roi_hsv[:, :, 1])
-                if mean_sat < 120:
+                if mean_sat < self._min_saturation:
                     continue
 
             valid_contours.append(cnt)

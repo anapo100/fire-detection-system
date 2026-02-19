@@ -33,3 +33,21 @@ Thumbs.db
 
 # Config with secrets (keep sample files)
 config/*_secret*
+
+# Temp files
+~$*
+*.tmp
+
+# Presentation build files
+create_presentation.py
+generate_images.py
+
+# Claude
+.claude/
+
+# Distribution
+dist/
+build/
+
+# Platform tools (download separately)
+platform-tools/

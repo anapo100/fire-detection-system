@@ -16,14 +16,17 @@ class MotionFilter:
     출력: 움직임 점수 0-30점
     """
 
+    # Optical Flow 계산용 축소 비율 (원본 대비)
+    _FLOW_SCALE = 0.5
+
     def __init__(self, config: dict):
         mf_cfg = config.get("motion_filter", {})
         self.flow_threshold = mf_cfg.get("optical_flow_threshold", 2.5)
         self.temporal_frames = mf_cfg.get("temporal_frames", 5)
         self.pixel_change_threshold = mf_cfg.get("pixel_change_threshold", 0.15)
 
-        self._prev_grays: deque = deque(maxlen=self.temporal_frames)
         self._flow_magnitudes: deque = deque(maxlen=self.temporal_frames)
+        self._cached_prev_gray: Optional[np.ndarray] = None
 
     def analyze(
         self,
@@ -41,22 +44,37 @@ class MotionFilter:
         Returns:
             움직임 점수 (0-30)
         """
-        curr_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        prev_gray = cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY)
+        # 축소 해상도에서 Optical Flow 계산 (성능 핵심)
+        small = cv2.resize(frame, None, fx=self._FLOW_SCALE, fy=self._FLOW_SCALE,
+                           interpolation=cv2.INTER_AREA)
+        curr_gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
 
-        # Farneback Optical Flow 계산
+        # 캐싱된 이전 gray 사용, 없으면 새로 변환
+        if self._cached_prev_gray is not None:
+            prev_gray = self._cached_prev_gray
+        else:
+            small_prev = cv2.resize(prev_frame, None, fx=self._FLOW_SCALE, fy=self._FLOW_SCALE,
+                                    interpolation=cv2.INTER_AREA)
+            prev_gray = cv2.cvtColor(small_prev, cv2.COLOR_BGR2GRAY)
+
+        # 현재 gray를 다음 호출을 위해 캐싱
+        self._cached_prev_gray = curr_gray
+
+        # Farneback Optical Flow (경량화 파라미터)
         flow = cv2.calcOpticalFlowFarneback(
             prev_gray, curr_gray, None,
-            pyr_scale=0.5, levels=3, winsize=15,
-            iterations=3, poly_n=5, poly_sigma=1.2,
+            pyr_scale=0.5, levels=2, winsize=11,
+            iterations=2, poly_n=5, poly_sigma=1.1,
             flags=0,
         )
 
-        magnitude, angle = cv2.cartToPolar(flow[..., 0], flow[..., 1])
+        magnitude, _ = cv2.cartToPolar(flow[..., 0], flow[..., 1])
 
-        # 화염 영역 내의 움직임만 분석
-        if fire_mask is not None and fire_mask.shape == magnitude.shape:
-            fire_region = fire_mask > 0
+        # 화염 영역 내의 움직임만 분석 (마스크를 축소 크기로 리사이즈)
+        if fire_mask is not None:
+            small_mask = cv2.resize(fire_mask, (curr_gray.shape[1], curr_gray.shape[0]),
+                                   interpolation=cv2.INTER_NEAREST)
+            fire_region = small_mask > 0
             if np.any(fire_region):
                 region_magnitude = magnitude[fire_region]
             else:
@@ -66,9 +84,6 @@ class MotionFilter:
 
         mean_mag = float(np.mean(region_magnitude)) if region_magnitude.size > 0 else 0.0
         self._flow_magnitudes.append(mean_mag)
-
-        # 시간적 변화 분석
-        self._prev_grays.append(curr_gray)
 
         score = self._calculate_score(mean_mag)
         return score
@@ -96,5 +111,5 @@ class MotionFilter:
 
     def reset(self):
         """상태를 초기화한다."""
-        self._prev_grays.clear()
         self._flow_magnitudes.clear()
+        self._cached_prev_gray = None

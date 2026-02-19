@@ -1,914 +1,368 @@
-# 제조 현장 화재 감지 시스템 (스마트폰 카메라 임시 연동)
+# 제조 현장 화재 감지 시스템
 
-> **프로젝트 개요**: 제조 현장에서 화재를 실시간으로 감지하는 자동 모니터링 시스템  
-> **특징**: CCTV 대신 스마트폰 카메라를 임시로 활용하여 빠른 테스트 및 PoC(Proof of Concept) 구현
+<p align="center">
+  <img src="assets/pipeline_diagram.png" alt="5단계 화재 감지 파이프라인" width="800">
+</p>
 
----
+<p align="center">
+  <b>CV 4단계 필터링 + YOLOv8 AI 검증 | 실시간 15fps | USB/ADB 카메라 | 단일 EXE 배포</b>
+</p>
 
-## 📋 목차
-
-- [시스템 개요](#시스템-개요)
-- [주요 기능](#주요-기능)
-- [시스템 아키텍처](#시스템-아키텍처)
-- [사전 준비사항](#사전-준비사항)
-- [설치 가이드](#설치-가이드)
-- [스마트폰 설정 방법](#스마트폰-설정-방법)
-- [실행 방법](#실행-방법)
-- [설정 파일 구조](#설정-파일-구조)
-- [화재 감지 로직](#화재-감지-로직)
-- [트러블슈팅](#트러블슈팅)
-- [제한사항 및 향후 계획](#제한사항-및-향후-계획)
+<p align="center">
+  <img src="https://img.shields.io/badge/Python-3.12-blue?logo=python&logoColor=white" alt="Python 3.12">
+  <img src="https://img.shields.io/badge/OpenCV-4.x-green?logo=opencv&logoColor=white" alt="OpenCV">
+  <img src="https://img.shields.io/badge/YOLOv8-Ultralytics-purple?logo=yolo&logoColor=white" alt="YOLOv8">
+  <img src="https://img.shields.io/badge/PyTorch-CUDA%2012.4-red?logo=pytorch&logoColor=white" alt="PyTorch">
+  <img src="https://img.shields.io/badge/License-MIT-yellow" alt="License">
+</p>
 
 ---
 
-## 🎯 시스템 개요
+## 개요
 
-### 구성도
+제조 현장을 위한 실시간 화재 감지 시스템. **4개의 컴퓨터 비전 필터**(색상, 움직임, 형태, 연기)와 **YOLOv8 AI 검증**을 결합하여 높은 정확도와 낮은 오탐률을 동시에 달성한다.
+
+스마트폰 카메라로부터 **USB/ADB 포트포워딩**(네트워크 지연 없음)으로 영상을 수신하고, 각 프레임을 5단계 파이프라인으로 처리하여 화재 감지 시 Slack, 이메일, 경보음으로 알림을 전송한다.
+
+### 주요 기능
+
+| 기능 | 설명 |
+|---|---|
+| **5단계 하이브리드 감지** | CV 필터 + YOLO AI 교차 검증으로 높은 정확도 |
+| **실시간 15fps** | 스레드 프레임 리더 + N프레임 간격 최적화 |
+| **USB 카메라 (ADB)** | 포트포워딩으로 네트워크 지연 제거 |
+| **4단계 알림 시스템** | Normal / Warning / Alert / Critical + Slack, 이메일, 경보음, 영상 |
+| **오탐 방지** | 3중 방어: 필터 단계, 엔진 단계, 시스템 단계 |
+| **단일 EXE 배포** | PyInstaller 패키징 (GPU 지원 포함) |
+
+---
+
+## 시스템 아키텍처
+
+<p align="center">
+  <img src="assets/architecture_diagram.png" alt="시스템 아키텍처" width="800">
+</p>
 
 ```
-┌─────────────────────────────────┐
-│   스마트폰 (임시 카메라)           │
-│   - IP Webcam 앱 실행            │
-│   - WiFi 스트리밍 (MJPEG/RTSP)   │
-│   - 촬영 시간: 필요한 기간만      │
-└────────────┬────────────────────┘
-             │ WiFi Network
-             │ (192.168.x.x)
-             ↓
-┌─────────────────────────────────┐
-│   처리 서버 (PC/노트북)           │
-│   - 영상 수신 및 전처리           │
-│   - 화재 감지 알고리즘 실행       │
-│   - 실시간 모니터링 화면          │
-└────────────┬────────────────────┘
-             │
-             ↓
-┌─────────────────────────────────┐
-│   알림 시스템                     │
-│   - Slack / Email               │
-│   - 로컬 사운드 경고              │
-│   - 로그 기록 및 스냅샷 저장      │
-└─────────────────────────────────┘
+스마트폰 (IP Webcam)  ──USB/ADB──>  스레드 프레임 리더  ──>  전처리 (Blur + CLAHE)
+                                                                     │
+                                                                     v
+                                      ┌──────────────────────────────────────────────┐
+                                      │          5단계 화재 감지 엔진                  │
+                                      │  색상 → 움직임 → 형태 → 연기 → YOLO            │
+                                      └──────────────────────┬───────────────────────┘
+                                                             │
+                                                             v
+                                                  신뢰도 점수 (0-100)
+                                                             │
+                                                             v
+                                                  알림 시스템 (Slack/이메일/경보음)
 ```
-
-### 사용 시나리오
-
-1. **임시 테스트**: CCTV 설치 전 시스템 검증
-2. **단기 모니터링**: 특정 공정 작업 시간(2-3시간) 동안만 감시
-3. **이동형 감시**: 작업 구역 변경 시 카메라 위치 이동 가능
-4. **PoC 구현**: 경영진/안전 담당자에게 시스템 효과 시연
 
 ---
 
-## ✨ 주요 기능
+## 5단계 감지 파이프라인
 
-### 1. 화재 감지 기능
-- **색상 기반 감지**: HSV 색공간에서 화염 특유의 주황/노랑 색상 검출
-- **움직임 분석**: Optical Flow로 불꽃의 불규칙한 움직임 패턴 감지
-- **형태 분석**: 화염의 수직 확장 패턴 및 경계선 불규칙성 검증
-- **다단계 필터링**: 용접 불꽃, LED 조명 등 오탐 요소 제거
+### 1~3단계: 화염 분석
 
-### 2. 제조 현장 특화 기능
-- **ROI(관심 영역) 설정**: 위험 구역만 선택적으로 모니터링
-- **시간적 일관성 검증**: 3프레임 이상 연속 감지 시에만 경고 (순간 오탐 방지)
-- **민감도 조절**: 현장 환경에 따라 임계값 자유롭게 조정 가능
-- **False Positive 최소화**: 용접 작업, 조명 반사 등을 학습하여 배제
+| 단계 | 필터 | 방법 | 점수 |
+|:---:|---|---|:---:|
+| 1 | **색상 필터** | HSV 색공간 화염 마스크 + 모폴로지 + 피부/조명 제외 | 0-40 |
+| 2 | **움직임 필터** | Farneback Optical Flow + 상향 불규칙 움직임 감지 | 0-30 |
+| 3 | **형태 필터** | 윤곽선 불규칙도 + 수직 확장 + 색상 그래디언트 | 0-30 |
 
-### 3. 알림 시스템
-- **3단계 경고 레벨**:
-  - Level 1 (60-70점): 로그만 기록
-  - Level 2 (70-85점): Slack 알림 + 스냅샷 저장
-  - Level 3 (85-100점): 사이렌 + Email + 긴급 연락
-- **중복 알림 방지**: 동일 위치 30초 쿨다운
-- **비디오 녹화**: 감지 10초 전후 영상 자동 저장
+**화염 위험도** = 색상(x0.4) + 움직임(x0.3) + 형태(x0.3) → 0-100 스케일로 정규화
 
-### 4. 스마트폰 카메라 전용 기능
-- **배터리 모니터링**: 20% 이하 시 자동 경고
-- **과열 감지**: 45도 이상 시 해상도 자동 조절
-- **네트워크 안정성**: WiFi 끊김 시 자동 재연결 (최대 10회)
-- **지연 시간 최적화**: 버퍼 최소화로 200ms 이하 지연
+### 4단계: 연기 분석 (독립)
+
+| 단계 | 필터 | 방법 | 점수 |
+|:---:|---|---|:---:|
+| 4 | **연기 필터** | HSV 무채색 마스크 + Laplacian 텍스처 + 확산 패턴 | 0-100 |
+
+### 5단계: YOLO AI 검증
+
+| 단계 | 필터 | 방법 | 보정 |
+|:---:|---|---|:---:|
+| 5 | **YOLOv8n** | 화재/연기 객체 탐지 (6.2MB 모델, GPU ~33ms) | -25 ~ +25 |
+
+> YOLO는 기존 필터를 **대체하지 않는다**. 최종 검증자로서 신뢰도 점수를 상향 또는 하향 보정한다.
+
+| YOLO 결과 | 조건 | 동작 |
+|---|---|---|
+| 화재 감지 (conf >= 0.4) | -- | +25점 (상향) |
+| 연기만 감지 | -- | +10점 (상향) |
+| 미감지 | 기존 점수 >= 15 | x0.75 (25% 하향) |
+| 미감지 | 기존 점수 < 15 | 변동 없음 |
 
 ---
 
-## 🏗️ 시스템 아키텍처
+## 신뢰도 계산
 
-### 디렉토리 구조
+<p align="center">
+  <img src="assets/confidence_chart.png" alt="신뢰도 계산 시나리오" width="800">
+</p>
+
+| 시나리오 | 공식 | 최대 점수 |
+|---|---|:---:|
+| 화염 + 연기 (동시 감지) | flame x 0.55 + smoke x 0.25 + 시너지 보너스 20 | 100 |
+| 화염만 감지 | flame_risk x 0.8 | 80 |
+| 연기만 감지 | smoke_risk x 0.5 | 50 |
+| 미감지 | flame x 0.3 + smoke x 0.1 | ~15 |
+
+### 알림 레벨
+
+| 레벨 | 신뢰도 | 상태 | 동작 |
+|---|:---:|---|---|
+| **Normal** | 0 - 29 | 모니터링 | 화면 표시만 (녹색) |
+| **Warning** | 30 - 44 | 주의 | 콘솔 로그 (노란색) |
+| **Alert** | 45 - 64 | 화재 의심 | Slack + 스냅샷 (주황색) |
+| **Critical** | 65 - 100 | 화재 확인 | Slack + 이메일 + 경보음 + 영상 (빨간색) |
+
+---
+
+## 성능
+
+<p align="center">
+  <img src="assets/performance_chart.png" alt="처리 시간 예산" width="800">
+</p>
+
+| 컴포넌트 | 시간 | 최적화 |
+|---|:---:|---|
+| 카메라 (스레드) | ~0ms | 백그라운드 스레드, 즉시 반환 |
+| 전처리 | ~5ms | Gaussian Blur + CLAHE (V채널) |
+| 색상 필터 | ~3ms | HSV 마스크 + 모폴로지 |
+| 연기 필터 | ~4ms | Laplacian + 누적 확산 |
+| 움직임 필터 (평균) | ~5ms | 2프레임 간격 + 0.5x 다운스케일 |
+| 형태 필터 | ~1ms | 상위 5개 윤곽선만 |
+| YOLO (평균) | ~7ms | 3프레임 간격 + GPU (33ms → 평균 7ms) |
+| 화면 표시 (평균) | ~7ms | 2프레임 간격 imshow |
+| **합계** | **~32ms** | **예산: 66.7ms (15fps) — 34.7ms 여유** |
+
+### 주요 최적화 기법
+
+- **스레드 MJPEG 리더**: 데몬 스레드가 프레임을 지속 디코딩, `read_frame()` 즉시 반환 (~0ms)
+- **N프레임 간격 처리**: Optical Flow 2프레임, YOLO 3프레임, imshow 2프레임마다 실행
+- **0.5x 다운스케일**: Optical Flow를 절반 해상도로 실행 (연산량 1/4)
+- **스트림 자동 갱신**: 5분마다 TCP 재연결로 MJPEG 버퍼 누적 방지
+
+---
+
+## 기술 스택
+
+| 분류 | 기술 | 상세 |
+|---|---|---|
+| 영상 처리 | OpenCV 4.x | 프레임 캡처, 전처리, CV 필터 |
+| AI 모델 | YOLOv8n (Ultralytics) | 화재/연기 탐지, 6.2MB, 2클래스 |
+| GPU | PyTorch + CUDA 12.4 | GTX 1050 추론 (~33ms/프레임) |
+| 카메라 | IP Webcam + ADB | USB 포트포워딩, MJPEG 스트림 |
+| 알림 | Slack API, SMTP | 웹훅 알림, 이메일 발송 |
+| 배포 | PyInstaller | GPU 지원 포함 단일 EXE |
+| 언어 | Python 3.12 | CUDA 호환 버전 |
+
+---
+
+## 프로젝트 구조
 
 ```
-fire_detection_system/
+fire-detection-system/
+├── main.py                          # 메인 실행 파일
+├── fire_detection.spec              # PyInstaller 빌드 스펙
+│
 ├── config/
-│   ├── camera_config.yaml          # 스마트폰 IP, 포트, 스트리밍 설정
-│   ├── detection_config.yaml       # 화재 감지 파라미터 (임계값, ROI)
-│   └── alert_config.yaml           # 알림 설정 (Slack, Email)
+│   ├── camera_config.yaml           # 카메라 연결 설정
+│   ├── detection_config.yaml        # 필터 파라미터 및 임계값
+│   └── alert_config.yaml            # 알림 레벨 및 알림 설정
 │
 ├── src/
 │   ├── core/
-│   │   ├── camera_loader.py        # 스마트폰 카메라 연결 및 재연결
-│   │   ├── image_processor.py      # 영상 전처리 (노이즈 제거, 히스토그램)
-│   │   ├── detector.py             # 화재 감지 메인 엔진
-│   │   └── phone_monitor.py        # 스마트폰 배터리/온도 모니터링
+│   │   ├── camera_loader.py         # 스레드 MJPEG 리더 + ADB 포워딩
+│   │   ├── detector.py              # 화재 감지 엔진 (5필터 + 신뢰도)
+│   │   └── image_processor.py       # 전처리 (Gaussian Blur + CLAHE)
 │   │
 │   ├── filters/
-│   │   ├── color_filter.py         # HSV 색상 기반 1차 필터
-│   │   ├── motion_filter.py        # Optical Flow 움직임 분석
-│   │   └── shape_filter.py         # Contour 형태 분석
+│   │   ├── color_filter.py          # HSV 색상 기반 화염 감지 (0-40점)
+│   │   ├── motion_filter.py         # Optical Flow 움직임 분석 (0-30점)
+│   │   ├── shape_filter.py          # 윤곽선 형태 분석 (0-30점)
+│   │   ├── smoke_filter.py          # 연기 감지 (색상+텍스처+확산)
+│   │   └── yolo_filter.py           # YOLOv8 AI 검증 필터
 │   │
 │   ├── alert/
-│   │   ├── alert_manager.py        # 알림 통합 관리
-│   │   ├── logger.py               # 로그 및 스냅샷 저장
-│   │   └── notifier.py             # Slack/Email/사운드 발송
+│   │   ├── alert_manager.py         # 알림 동작 관리자
+│   │   ├── logger.py                # 이벤트 로깅 + 스냅샷/영상 저장
+│   │   └── notifier.py              # Slack 웹훅, SMTP 이메일, 경보음
 │   │
 │   └── utils/
-│       ├── roi_manager.py          # ROI 설정 도구
-│       ├── performance_monitor.py  # FPS/지연시간 측정
-│       └── visualizer.py           # 디버깅 화면 오버레이
+│       ├── visualizer.py            # 실시간 오버레이 + YOLO 바운딩박스
+│       ├── performance_monitor.py   # FPS/지연시간 측정 (O(1) 누적)
+│       └── roi_manager.py           # 관심 영역(ROI) 관리
 │
-├── logs/                           # 감지 이벤트 로그 및 이미지
-├── tests/                          # 단위 테스트
-├── main.py                         # 메인 실행 파일
-├── requirements.txt                # Python 패키지 목록
-└── README.md                       # 이 문서
-```
-
-### 처리 흐름도
-
-```
-1. 스마트폰 카메라 연결 (IP Webcam 앱)
-   ↓
-2. 영상 스트리밍 (MJPEG/RTSP via WiFi)
-   ↓
-3. 컴퓨터에서 실시간 수신
-   ↓
-4. 전처리 (리사이징, 노이즈 제거, CLAHE)
-   ↓
-5. 화재 감지 로직 실행
-   ├── 1차: 색상 필터 (HSV 범위 검증)
-   ├── 2차: 움직임 필터 (Optical Flow)
-   └── 3차: 형태 필터 (Contour 분석)
-   ↓
-6. 신뢰도 점수 계산 (0-100점)
-   ↓
-7. 임계값 초과 시 알림 발송
-   ↓
-8. 로그 기록 및 스냅샷 저장
+├── models/
+│   └── yolov8n-fire.pt              # 사전학습된 화재/연기 YOLO 모델 (6.2MB)
+│
+├── platform-tools/
+│   └── adb.exe                      # Android Debug Bridge (USB 포워딩용)
+│
+├── logs/                            # 감지 이벤트, 스냅샷, 영상 클립
+├── assets/                          # 다이어그램 및 차트
+└── dist/                            # 빌드된 EXE 출력
+    └── FireDetectionSystem/
+        └── FireDetectionSystem.exe
 ```
 
 ---
 
-## 📦 사전 준비사항
+## 시작하기
 
-### 하드웨어
+### 사전 요구사항
 
-#### 1. 스마트폰 (임시 카메라 역할)
-- **OS**: Android 6.0 이상 (권장: Android 10+)
-- **카메라**: 최소 720p 지원 (1080p 권장)
-- **배터리**: 촬영 시간 동안 충전 케이블 연결 필수
-- **저장공간**: 최소 500MB 여유 공간 (앱 설치용)
+| 항목 | 요구사항 |
+|---|---|
+| **OS** | Windows 10/11 |
+| **GPU** | CUDA 지원 NVIDIA GPU (테스트: GTX 1050) |
+| **Python** | 3.12 (CUDA 12.4 호환에 필요) |
+| **스마트폰** | [IP Webcam](https://play.google.com/store/apps/details?id=com.pas.webcam) 앱이 설치된 Android |
+| **USB 케이블** | ADB 포트포워딩용 |
 
-#### 2. 처리 서버 (PC/노트북)
-- **OS**: Windows 10/11, Ubuntu 20.04 이상, macOS Monterey 이상
-- **CPU**: Intel i5 이상 (라즈베리파이 4도 가능하나 속도 저하)
-- **RAM**: 최소 4GB (8GB 권장)
-- **네트워크**: WiFi 5GHz 지원 또는 유선 LAN
-
-### 소프트웨어
-
-#### 스마트폰
-- **IP Webcam** (Android) - Google Play에서 무료 다운로드
-  - 대안: DroidCam, EpocCam (iOS 지원)
-
-#### 컴퓨터
-- **Python 3.8 이상**
-- **필수 라이브러리**: 
-  - OpenCV (cv2)
-  - NumPy
-  - PyYAML
-  - requests
-  - (선택) slack-sdk, smtplib
-
-### 네트워크 환경
-- **WiFi**: 스마트폰과 PC가 동일한 네트워크에 연결
-- **대역폭**: 최소 5Mbps (720p 스트리밍 기준)
-- **지연시간**: Ping < 50ms (동일 공유기 사용 시 자동 충족)
-- **권장**: 5GHz WiFi 사용 (2.4GHz는 혼잡할 수 있음)
-
----
-
-## 🚀 설치 가이드
-
-### 1. 저장소 클론 (또는 파일 다운로드)
+### 설치
 
 ```bash
+# 1. 저장소 클론
 git clone https://github.com/your-repo/fire-detection-system.git
 cd fire-detection-system
+
+# 2. 의존성 설치
+pip install opencv-python numpy PyYAML requests pillow
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
+pip install ultralytics
+pip install slack-sdk  # 선택: Slack 알림용
+
+# 3. GPU 확인
+python -c "import torch; print(f'CUDA: {torch.cuda.is_available()}, GPU: {torch.cuda.get_device_name(0)}')"
 ```
 
-### 2. Python 가상환경 생성 (권장)
+### 실행
 
 ```bash
-# Windows
-python -m venv venv
-venv\Scripts\activate
+# 1. 스마트폰을 USB로 연결 (USB 디버깅 ON)
+# 2. 스마트폰에서 IP Webcam 앱 실행 → 서버 시작 (포트 8080)
 
-# Linux/macOS
-python3 -m venv venv
-source venv/bin/activate
-```
-
-### 3. 필수 패키지 설치
-
-```bash
-pip install -r requirements.txt
-```
-
-**requirements.txt 내용**:
-```
-opencv-python>=4.8.0
-numpy>=1.24.0
-PyYAML>=6.0
-requests>=2.31.0
-pillow>=10.0.0
-slack-sdk>=3.23.0  # Slack 알림 사용 시
-```
-
-### 4. 설정 파일 준비
-
-`config/` 폴더의 샘플 파일을 복사하여 수정:
-
-```bash
-cp config/camera_config.yaml.sample config/camera_config.yaml
-cp config/detection_config.yaml.sample config/detection_config.yaml
-cp config/alert_config.yaml.sample config/alert_config.yaml
-```
-
----
-
-## 📱 스마트폰 설정 방법
-
-### Step 1: IP Webcam 앱 설치
-
-1. Google Play 스토어에서 **"IP Webcam"** 검색 및 설치
-2. 앱 실행 후 필요한 권한 허용 (카메라, 마이크, 저장공간)
-
-### Step 2: 스마트폰 설정
-
-#### 필수 설정
-```yaml
-화질 및 해상도:
-  - Video preferences → Resolution: 1280x720
-  - Video preferences → Quality: 80%
-  - Video preferences → FPS limit: 30
-
-카메라 선택:
-  - Camera → Back camera (후면 카메라 사용, 화질 우수)
-
-네트워크 설정:
-  - Local broadcasting → Port: 8080 (기본값)
-  - Login/Password: (선택) 보안 필요 시 설정
-```
-
-#### 전원 관리 (중요!)
-```yaml
-배터리 설정:
-  - Settings → Power management → "Prevent device from sleeping" 체크
-  - Settings → Advanced → "Keep screen on" 체크
-  - WiFi Lock 활성화
-
-충전:
-  - USB 케이블을 연결하여 상시 충전
-  - 과열 방지를 위해 스마트폰 케이스 제거 권장
-```
-
-### Step 3: 서버 시작
-
-1. IP Webcam 앱 하단의 **"Start server"** 버튼 클릭
-2. 화면에 표시되는 IP 주소 확인
-   ```
-   예시: http://192.168.0.105:8080
-   ```
-3. 이 IP 주소를 메모 (설정 파일에 입력 필요)
-
-### Step 4: 연결 테스트
-
-#### 방법 1: 웹 브라우저 확인
-1. PC에서 웹 브라우저 열기
-2. 주소창에 `http://192.168.0.105:8080` 입력 (스마트폰에 표시된 IP 사용)
-3. 실시간 영상이 보이면 연결 성공
-
-#### 방법 2: VLC Media Player 확인
-1. VLC 실행 → Media → Open Network Stream
-2. URL 입력: `http://192.168.0.105:8080/video`
-3. 영상 재생 확인
-
-### Step 5: 스마트폰 고정
-
-```
-고정 방법 (선택):
-
-1. 삼각대 마운트
-   - 스마트폰 홀더 + 미니 삼각대 사용
-   - 장점: 각도 조절 자유로움
-   - 가격: 1-2만원
-
-2. 벽면 마운트
-   - 자석식 차량용 거치대 + 3M 테이프
-   - 장점: 공간 절약, 흔들림 없음
-   - 단점: 위치 변경 어려움
-
-3. 클램프형 거치대
-   - 구스넥(goose neck) 스마트폰 거치대
-   - 장점: 책상/선반에 쉽게 고정
-   - 가격: 1-3만원
-
-촬영 각도:
-- 모니터링 대상을 정면으로 촬영
-- 역광 피하기 (창문 반대편)
-- 높이: 바닥에서 1.5-2m (전체 작업 공간 확보)
-```
-
----
-
-## ▶️ 실행 방법
-
-### 1. 설정 파일 수정
-
-`config/camera_config.yaml` 파일을 열어 스마트폰 IP 입력:
-
-```yaml
-camera:
-  smartphone:
-    phone_ip: "192.168.0.105"  # 스마트폰에 표시된 IP로 변경
-    port: 8080
-    stream_type: "mjpeg"  # mjpeg 추천 (지연 적음)
-```
-
-### 2. 프로그램 실행
-
-```bash
+# 3. 시스템 실행
 python main.py
+
+# 4. Q키로 종료
 ```
 
-### 3. 실행 화면 확인
+### EXE 빌드
 
+```bash
+# PyInstaller로 빌드 (Python 3.12 사용)
+pyinstaller fire_detection.spec --noconfirm
+
+# 출력: dist/FireDetectionSystem/FireDetectionSystem.exe
 ```
-출력 예시:
-
-[INFO] 설정 파일 로드 완료
-[INFO] Connecting to smartphone camera: http://192.168.0.105:8080/video
-[INFO] Camera connected successfully
-[INFO] 스마트폰 배터리: 87% (충전 중)
-[INFO] 화재 감지 시스템 시작...
-
-실시간 모니터링 화면:
-┌─────────────────────────────────────┐
-│  [실시간 영상]                       │
-│  Battery: 87%  |  Temp: 32°C        │
-│  FPS: 28       |  Latency: 180ms    │
-│  Status: 정상 모니터링 중             │
-└─────────────────────────────────────┘
-
-[2025-02-09 14:23:11] 화재 미감지 (신뢰도: 12%)
-[2025-02-09 14:23:12] 화재 미감지 (신뢰도: 8%)
-```
-
-### 4. 화재 감지 시 동작
-
-```
-[WARNING] 화재 의심 감지! (신뢰도: 73%)
-[ALERT] 🔥 화재 감지 확정! (신뢰도: 86%)
-  - 위치: ROI-1 (작업대 근처)
-  - 시간: 2025-02-09 14:25:33
-  - 스냅샷 저장: logs/2025-02-09/14-25-33_fire_detected.jpg
-  - Slack 알림 발송 완료
-  - 사이렌 재생 중...
-```
-
-### 5. 종료 방법
-
-- 터미널에서 `Ctrl + C` 입력
-- 또는 모니터링 창에서 `Q` 키 입력
 
 ---
 
-## ⚙️ 설정 파일 구조
+## 설정
 
-### 1. `camera_config.yaml` - 카메라 설정
+### `config/camera_config.yaml`
 
 ```yaml
 camera:
-  type: smartphone
-  
+  type: usb_adb           # ADB 포트포워딩을 통한 USB 연결
   smartphone:
-    phone_ip: "192.168.0.105"      # 스마트폰 IP (필수 수정)
-    port: 8080                      # IP Webcam 포트
-    username: ""                    # 선택: 보안 설정 시
-    password: ""                    # 선택: 보안 설정 시
-    stream_type: "mjpeg"            # mjpeg / rtsp / snapshot
-    
+    port: 8080             # IP Webcam 앱 포트
   processing:
-    target_resolution: [640, 480]   # 처리용 해상도 (속도 최적화)
-    target_fps: 15                  # 처리 FPS (배터리 절약)
-    buffer_size: 1                  # 최소 버퍼 (지연 감소)
-    
-  reconnection:
-    max_attempts: 10                # 최대 재연결 시도
-    retry_interval: 3               # 재시도 간격 (초)
-    
-  monitoring:
-    check_battery: true             # 배터리 모니터링 활성화
-    battery_warning_threshold: 20   # 경고 임계값 (%)
-    temp_warning_threshold: 45      # 과열 경고 (°C)
+    target_resolution: [480, 360]
+    target_fps: 15
 ```
 
-### 2. `detection_config.yaml` - 화재 감지 설정
+### `config/detection_config.yaml`
 
 ```yaml
-# 색상 기반 1차 필터 (HSV 색공간)
 color_filter:
   hsv_ranges:
-    flame_orange:  # 주황색 화염
-      lower: [0, 100, 200]
-      upper: [20, 255, 255]
-    flame_yellow:  # 노란색 화염
-      lower: [20, 100, 200]
-      upper: [40, 255, 255]
-  
-  min_area: 300        # 최소 픽셀 면적 (작은 노이즈 제거)
-  max_area: 50000      # 최대 면적 (전체 화면 조명 제거)
+    flame_lower: [0, 80, 180]
+    flame_upper: [25, 255, 255]
+  max_score: 40
 
-# 움직임 기반 2차 필터
 motion_filter:
-  optical_flow_threshold: 2.5      # Flow 강도 임계값
-  temporal_frames: 5               # 연속 분석 프레임 수
-  pixel_change_threshold: 0.15     # 픽셀 변화율 (15%)
+  optical_flow_threshold: 2.5
+  frame_interval: 2          # 2프레임마다 실행
+  scale_factor: 0.5          # 0.5x 다운스케일
 
-# 형태 분석 3차 필터
-shape_filter:
-  irregularity_threshold: 20       # 경계선 불규칙성 지수
-  vertical_expansion_rate: 0.2     # 수직 확장 비율 (20%)
-
-# 최종 판정
-detection:
-  confidence_threshold: 70         # 화재 확정 임계값 (0-100)
-  debounce_seconds: 30             # 중복 알림 방지 시간
-  consecutive_frames: 3            # 연속 감지 필요 프레임
-
-# ROI (관심 영역) 설정
-roi:
+yolo_filter:
   enabled: true
-  regions:
-    - name: "작업대 구역"
-      coordinates: [100, 100, 500, 400]  # x1, y1, x2, y2
-    - name: "용접 구역"
-      coordinates: [520, 150, 900, 450]
+  model_path: "models/yolov8n-fire.pt"
+  confidence_threshold: 0.4
+  frame_interval: 3          # 3프레임마다 실행
+
+detection:
+  consecutive_frames: 3      # 연속 3프레임 감지 필요
+  debounce_seconds: 30       # 중복 알림 쿨다운
 ```
 
-### 3. `alert_config.yaml` - 알림 설정
+### `config/alert_config.yaml`
 
 ```yaml
 alert:
-  # 알림 레벨 설정
   levels:
-    warning:    # 60-70점
-      enabled: true
-      actions: ["log"]
-    
-    alert:      # 70-85점
-      enabled: true
-      actions: ["log", "slack", "snapshot"]
-    
-    critical:   # 85-100점
-      enabled: true
-      actions: ["log", "slack", "email", "sound", "video"]
-  
-  # Slack 설정
+    warning:   { threshold: 30, actions: ["log"] }
+    alert:     { threshold: 45, actions: ["log", "slack", "snapshot"] }
+    critical:  { threshold: 65, actions: ["log", "slack", "email", "sound", "video"] }
+
   slack:
     enabled: true
     webhook_url: "https://hooks.slack.com/services/YOUR/WEBHOOK/URL"
-    channel: "#fire-alerts"
-    mention_users: ["@safety-manager", "@facility-team"]
-  
-  # Email 설정
-  email:
-    enabled: false
-    smtp_server: "smtp.gmail.com"
-    smtp_port: 587
-    sender: "alert@company.com"
-    password: "your-app-password"
-    recipients: ["safety@company.com", "manager@company.com"]
-  
-  # 로컬 사운드
-  sound:
-    enabled: true
-    file_path: "assets/siren.wav"
-    volume: 0.8  # 0.0 ~ 1.0
-  
-  # 로그 저장
-  logging:
-    save_snapshots: true
-    save_videos: true
-    video_duration: 20  # 전후 20초 녹화
-    log_directory: "logs/"
 ```
 
 ---
 
-## 🔍 화재 감지 로직
+## 오탐 방지 메커니즘
 
-### 3단계 필터링 시스템
+3중 방어 체계를 통해 오탐을 최소화한다.
 
-#### **1단계: 색상 필터 (Color Filter)**
+### 1단계: 필터 수준
 
-```
-목적: 화염 특유의 색상 검출
+- 색상 필터: 고휘도/저채도 조명 영역 제외
+- 피부색 차감 (H:5-17 범위): 인체 오탐 방지
+- 움직임 필터: 규칙적/주기적 움직임 거부 (낮은 분산)
+- 형태 필터: 직사각형/정형 객체 제외
 
-동작 방식:
-1. RGB → HSV 색공간 변환
-2. 화염 색상 범위 매칭
-   - 주황색: Hue 0-20°, Saturation 100-255, Value 200-255
-   - 노란색: Hue 20-40°, Saturation 100-255, Value 200-255
+### 2단계: 엔진 수준
 
-제조 현장 오탐 제거:
-✓ 용접 불꽃: 크기 < 500px 제외
-✓ LED 조명: 종횡비 > 3 (가로로 긴 형태) 제외
-✓ 반사광: Saturation < 120 제외
+- **연속 프레임 검증**: 3프레임 이상 연속 감지 필요
+- **독립적 화염/연기 분석**: 시너지 기반 복합 점수 산출
+- **YOLO 교차 검증**: CV 감지 + AI 미감지 = 25% 점수 하향
 
-출력: Binary Mask + 신뢰도 0-40점
-```
+### 3단계: 시스템 수준
 
-#### **2단계: 움직임 필터 (Motion Filter)**
-
-```
-목적: 화염의 불규칙한 움직임 패턴 검증
-
-동작 방식:
-1. Optical Flow (Farneback) 계산
-2. 움직임 벡터 크기(magnitude) 분석
-   - 화재: 불규칙하고 큰 움직임 (magnitude > 2.5)
-   - 정적 조명/용접: 움직임 없음 (magnitude < 1.0)
-
-3. 시간적 변화 분석 (5프레임 연속)
-   - 픽셀 변화율 > 15%: 화재 가능성
-   - 픽셀 변화율 < 5%: 정적 물체
-
-출력: 움직임 점수 0-30점
-```
-
-#### **3단계: 형태 필터 (Shape Filter)**
-
-```
-목적: 화염의 형태적 특성 검증
-
-동작 방식:
-1. Contour 추출 및 분석
-2. 불규칙성 지수 계산
-   - 공식: (Perimeter² / Area)
-   - 화재: > 20 (경계선 복잡함)
-   - 원형 조명: < 15 (경계선 단순함)
-
-3. 수직 확장 패턴 추적
-   - 화염은 위로 번지는 특성
-   - 3초 내 Bounding Box 높이 20% 이상 증가 감지
-
-4. 색상 분포 분석
-   - 화재: 중심부(노랑) → 외곽(빨강) 그라데이션
-   - 조명: 균일한 색상 분포
-
-출력: 형태 점수 0-30점
-```
-
-### 최종 점수 계산
-
-```
-Total Score = (Color Score × 0.4) + (Motion Score × 0.3) + (Shape Score × 0.3)
-
-판정:
-- 0-59점: 정상 (화재 없음)
-- 60-69점: 경계 (로그만 기록)
-- 70-84점: 화재 의심 (Slack 알림)
-- 85-100점: 화재 확정 (긴급 알림)
-```
-
-### 오탐 방지 메커니즘
-
-1. **시간적 일관성**: 3프레임 이상 연속 감지되어야 통과
-2. **공간적 제약**: ROI(관심 영역) 밖의 감지는 무시
-3. **크기 제약**: 최소 300px ~ 최대 50,000px 사이만 유효
-4. **쿨다운**: 동일 위치 30초 내 중복 알림 방지
+- **알림 디바운스**: 30초 중복 알림 쿨다운
+- **ROI 영역**: 관심 영역 밖 감지 무시
+- **단계적 대응**: 낮은 레벨은 로그만 기록 (알림 스팸 방지)
 
 ---
 
-## 🛠️ 트러블슈팅
+## 향후 계획
 
-### 문제 1: 스마트폰 카메라가 연결되지 않음
-
-**증상**:
-```
-[ERROR] Connection failed: Failed to open stream
-```
-
-**해결 방법**:
-
-1. **네트워크 확인**
-   ```bash
-   # 스마트폰과 PC가 같은 WiFi에 연결되어 있는지 확인
-   # PC에서 스마트폰 Ping 테스트
-   ping 192.168.0.105
-   ```
-   - 응답 있음: 연결 정상
-   - 응답 없음: 같은 WiFi 네트워크인지 재확인
-
-2. **IP Webcam 앱 상태 확인**
-   - "Start server" 버튼을 눌렀는지 확인
-   - 앱이 백그라운드로 이동했는지 확인 (포그라운드로 다시 전환)
-
-3. **방화벽 설정**
-   - Windows: 제어판 → Windows Defender 방화벽 → 고급 설정
-   - 인바운드 규칙에서 포트 8080 허용 추가
-
-4. **IP 주소 재확인**
-   - 스마트폰에 표시된 IP와 설정 파일의 IP가 일치하는지 확인
-   - 공유기 설정에서 스마트폰 IP를 고정 IP로 할당 (DHCP 예약)
+- [ ] 다중 카메라 지원 (RTSP/IP 카메라)
+- [ ] 웹 대시보드 (Flask/FastAPI)
+- [ ] 커스텀 YOLO 모델 학습 (정확도 향상)
+- [ ] 열화상 카메라 연동
+- [ ] 엣지 디바이스 최적화 (Jetson Nano)
+- [ ] 클라우드 모니터링 및 원격 접근
 
 ---
 
-### 문제 2: 영상 지연이 심함 (>500ms)
+## 라이선스
 
-**증상**:
-```
-[INFO] Latency: 650ms (경고: 목표 200ms 초과)
-```
-
-**해결 방법**:
-
-1. **스트리밍 방식 변경**
-   ```yaml
-   # camera_config.yaml
-   stream_type: "mjpeg"  # rtsp보다 지연 적음
-   ```
-
-2. **해상도 낮추기**
-   ```yaml
-   # IP Webcam 앱 설정
-   Resolution: 640x480  # 1280x720에서 변경
-   ```
-
-3. **WiFi 최적화**
-   - 5GHz 대역 사용 (공유기 설정)
-   - 공유기-스마트폰 거리 5m 이내 유지
-   - 다른 기기의 대역폭 사용 최소화 (스트리밍, 다운로드 중단)
-
-4. **버퍼 설정 확인**
-   ```yaml
-   # camera_config.yaml
-   buffer_size: 1  # 이미 최소값 (변경 불필요)
-   ```
+이 프로젝트는 MIT 라이선스를 따른다.
 
 ---
 
-### 문제 3: 화재 오탐 (용접 불꽃을 화재로 인식)
+## 참고 자료
 
-**증상**:
-```
-[ALERT] 🔥 화재 감지! (신뢰도: 78%)
-→ 실제로는 용접 작업 중
-```
-
-**해결 방법**:
-
-1. **ROI 설정으로 용접 구역 제외**
-   ```yaml
-   # detection_config.yaml
-   roi:
-     enabled: true
-     regions:
-       - name: "모니터링 구역"
-         coordinates: [200, 150, 800, 500]  # 용접 구역 제외
-   ```
-
-2. **민감도 임계값 상향 조정**
-   ```yaml
-   detection:
-     confidence_threshold: 80  # 70 → 80으로 상향
-   ```
-
-3. **크기 필터 조정**
-   ```yaml
-   color_filter:
-     min_area: 500  # 300 → 500 (용접 불꽃은 작음)
-   ```
-
-4. **시간 필터 강화**
-   ```yaml
-   detection:
-     consecutive_frames: 5  # 3 → 5 (더 오래 지속되어야 감지)
-   ```
-
----
-
-### 문제 4: 스마트폰 과열 또는 배터리 소모
-
-**증상**:
-```
-[WARNING] 🔥 스마트폰 과열! 배터리 온도: 48°C
-```
-
-**해결 방법**:
-
-1. **해상도 및 FPS 낮추기**
-   ```yaml
-   # IP Webcam 앱 설정
-   Resolution: 640x480
-   FPS limit: 15
-   Quality: 60%
-   ```
-
-2. **물리적 냉각**
-   - 스마트폰 케이스 제거
-   - 선풍기로 통풍 확보
-   - 직사광선 피하기
-
-3. **충전 케이블 연결**
-   - 상시 충전 유지
-   - 급속 충전 사용 (과열 우려 시 일반 충전)
-
-4. **야간 모드 활용**
-   ```yaml
-   # IP Webcam 앱 설정
-   Night Vision: ON
-   Screen brightness: 최소
-   ```
-
----
-
-### 문제 5: 연결이 자꾸 끊김
-
-**증상**:
-```
-[WARNING] Frame read error: timeout
-[INFO] Reconnecting... (attempt 3/10)
-```
-
-**해결 방법**:
-
-1. **WiFi 절전 모드 비활성화**
-   ```
-   IP Webcam 앱 설정:
-   - Settings → Advanced → WiFi Lock: ON
-   ```
-
-2. **스마트폰 절전 모드 해제**
-   ```
-   스마트폰 설정:
-   - 설정 → 배터리 → 절전 모드: OFF
-   - 설정 → 배터리 → 앱별 배터리 사용 → IP Webcam → 제한 없음
-   ```
-
-3. **공유기 설정 최적화**
-   - DHCP에서 스마트폰 IP 고정
-   - QoS 설정에서 스마트폰 우선순위 높임
-
-4. **재연결 파라미터 조정**
-   ```yaml
-   # camera_config.yaml
-   reconnection:
-     max_attempts: 20  # 10 → 20
-     retry_interval: 5  # 3 → 5 (재시도 간격 증가)
-   ```
-
----
-
-### 문제 6: 야간/어두운 환경에서 감지 안 됨
-
-**증상**:
-```
-[INFO] 화재 미감지 (신뢰도: 3%)
-→ 실제로는 작은 불꽃이 있음
-```
-
-**해결 방법**:
-
-1. **IP Webcam 야간 모드 활성화**
-   ```
-   IP Webcam 앱 설정:
-   - Night Vision: ON
-   - Exposure: +1 또는 +2 (밝기 증가)
-   ```
-
-2. **히스토그램 균일화 강화**
-   ```yaml
-   # detection_config.yaml (코드 수정 필요)
-   preprocessing:
-     clahe_clip_limit: 3.0  # 2.0 → 3.0 (대비 강화)
-   ```
-
-3. **보조 조명 설치**
-   - 작업 구역에 LED 조명 추가 (화재 감지에는 영향 없음)
-
----
-
-## ⚠️ 제한사항 및 향후 계획
-
-### 현재 시스템 제한사항
-
-#### 1. 스마트폰 카메라 사용 시 한계
-- **배터리 수명**: 장시간 사용 시 과열 및 배터리 소모
-- **네트워크 의존성**: WiFi 끊김 시 모니터링 중단
-- **촬영 각도 제약**: 1대의 카메라만 사용 시 사각지대 발생
-- **24/7 운영 부적합**: 임시 테스트용으로만 권장 (지속적 운영은 전용 CCTV 필요)
-
-#### 2. 화재 감지 정확도
-- **현재 정확도**: 약 80-85% (테스트 환경 기준)
-- **오탐 가능성**: 용접 작업, 강한 조명 반사 시 오탐 가능 (설정 조정으로 개선 가능)
-- **미감지 가능성**: 매우 작은 불씨, 연기만 있는 초기 단계는 감지 어려움
-
-#### 3. 환경적 제약
-- **조명 조건**: 역광이나 극도로 어두운 환경에서 성능 저하
-- **카메라 시야**: 단일 카메라로 전체 제조 현장 커버 불가
-- **물리적 장애물**: 기계, 작업자 등이 가림 시 사각지대 발생
-
----
-
-### 향후 개선 계획
-
-#### Phase 1: 즉시 적용 가능 (1-2주)
-- [ ] **다중 스마트폰 지원**: 2-3대의 스마트폰을 동시 연결하여 사각지대 제거
-- [ ] **연기 감지 추가**: 색상 기반 연기 감지 로직 통합 (회색조 분석)
-- [ ] **웹 대시보드**: 브라우저에서 실시간 모니터링 화면 제공
-
-#### Phase 2: 단기 개선 (1개월)
-- [ ] **YOLO 모델 통합**: YOLOv8-nano로 화재/연기 객체 인식 추가 (정확도 90%+ 목표)
-- [ ] **열화상 카메라 지원**: MLX90640 저가형 열화상 센서 통합 (온도 기반 감지)
-- [ ] **클라우드 저장**: AWS S3 또는 Google Drive에 감지 영상 자동 백업
-
-#### Phase 3: 중장기 개선 (3개월)
-- [ ] **전용 CCTV 연동**: IP 카메라 (RTSP) 정식 지원
-- [ ] **Edge AI 최적화**: 라즈베리파이에서도 실시간 처리 (15 FPS 목표)
-- [ ] **MES/ERP 연동**: 제조 실행 시스템과 통합하여 공정 중단 자동화
-- [ ] **모바일 앱**: 관리자용 iOS/Android 앱 개발 (실시간 알림 + 원격 제어)
-
----
-
-### 정식 CCTV 도입 시 마이그레이션 계획
-
-```
-현재 (스마트폰 임시)          →    정식 CCTV 시스템
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-IP Webcam 앱 (WiFi)          →    IP Camera (PoE/WiFi)
-단일 카메라                    →    다중 카메라 (4-8대)
-720p 해상도                   →    1080p 또는 4K
-배터리 + 충전                 →    유선 전원 (PoE)
-재연결 로직 필요               →    안정적 24/7 운영
-
-변경 필요 사항:
-1. camera_config.yaml에서 type: cctv로 변경
-2. RTSP URL 형식 수정 (예: rtsp://admin:password@192.168.0.50:554/stream1)
-3. 기존 화재 감지 로직은 그대로 사용 가능 (코드 변경 최소화)
-```
-
----
-
-## 📞 문의 및 지원
-
-### 기술 지원
-- **이메일**: your-email@company.com
-- **GitHub Issues**: https://github.com/your-repo/fire-detection-system/issues
-
-### 참고 자료
-- **IP Webcam 공식 가이드**: http://ip-webcam.appspot.com/
-- **OpenCV 문서**: https://docs.opencv.org/
-- **화재 감지 논문**: [링크 추가 예정]
-
----
-
-## 📄 라이선스
-
-본 프로젝트는 MIT 라이선스를 따릅니다.
-
----
-
-## 🙏 기여
-
-Pull Request 및 Issue 등록 환영합니다!
-
-1. Fork the Project
-2. Create your Feature Branch (`git checkout -b feature/AmazingFeature`)
-3. Commit your Changes (`git commit -m 'Add some AmazingFeature'`)
-4. Push to the Branch (`git push origin feature/AmazingFeature`)
-5. Open a Pull Request
-
----
-
-## 📝 변경 이력
-
-### v1.0.0 (2025-02-09)
-- 초기 버전 릴리스
-- 스마트폰 카메라 연동 기능
-- 3단계 화재 감지 알고리즘
-- Slack/Email 알림 시스템
-
----
-
-**제작**: Senior Computer Vision Engineer  
-**최종 수정**: 2025-02-09  
-**버전**: 1.0.0
+- [Ultralytics YOLOv8](https://github.com/ultralytics/ultralytics)
+- [OpenCV Documentation](https://docs.opencv.org/)
+- [tobybreckon/fire-detection-cnn](https://github.com/tobybreckon/fire-detection-cnn)
+- [spacewalk01/yolov5-fire-detection](https://github.com/spacewalk01/yolov5-fire-detection)

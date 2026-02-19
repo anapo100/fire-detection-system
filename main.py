@@ -1,13 +1,14 @@
 """제조 현장 화재 감지 시스템 - 메인 실행 파일.
 
-스마트폰 카메라(IP Webcam)로부터 영상을 수신하여
-3단계 필터링 기반의 실시간 화재 감지를 수행한다.
+USB(ADB 포트포워딩) + IP Webcam으로부터 영상을 수신하여
+4단계 필터링 기반의 실시간 화재 감지를 수행한다.
 
 사용법:
     python main.py
-    python main.py --config config/camera_config.yaml
+    python main.py --config config
 """
 
+import os
 import sys
 import time
 import signal
@@ -17,15 +18,25 @@ from pathlib import Path
 
 import cv2
 import yaml
-import numpy as np
+
+
+def get_base_dir() -> Path:
+    """데이터 파일(config/models 등)의 기준 경로를 반환한다."""
+    if getattr(sys, "frozen", False):
+        # PyInstaller: _internal 폴더 (datas가 위치하는 곳)
+        return Path(sys._MEIPASS)
+    return Path(__file__).parent
+
+
+def get_exe_dir() -> Path:
+    """실행 파일 옆 경로를 반환한다 (logs 등 쓰기용)."""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).parent
+    return Path(__file__).parent
 
 from src.core.camera_loader import CameraLoader
 from src.core.image_processor import ImageProcessor
 from src.core.detector import FireDetector
-from src.core.phone_monitor import PhoneMonitor
-from src.filters.color_filter import ColorFilter
-from src.filters.motion_filter import MotionFilter
-from src.filters.shape_filter import ShapeFilter
 from src.alert.alert_manager import AlertManager
 from src.utils.roi_manager import ROIManager
 from src.utils.performance_monitor import PerformanceMonitor
@@ -34,28 +45,35 @@ from src.utils.visualizer import Visualizer
 
 def setup_logging():
     """로깅 설정을 초기화한다."""
+    log_dir = get_exe_dir() / "logs"
+    log_dir.mkdir(exist_ok=True)
     logging.basicConfig(
         level=logging.INFO,
         format="[%(levelname)s] %(message)s",
         handlers=[
             logging.StreamHandler(sys.stdout),
-            logging.FileHandler("logs/system.log", encoding="utf-8"),
+            logging.FileHandler(str(log_dir / "system.log"), encoding="utf-8"),
         ],
     )
 
 
-def load_config(config_dir: str = "config") -> dict:
+def load_config(config_dir: str = "") -> dict:
     """설정 파일을 로드하여 통합된 설정 딕셔너리를 반환한다."""
     config = {}
 
-    config_files = {
-        "camera_config.yaml": None,
-        "detection_config.yaml": None,
-        "alert_config.yaml": None,
-    }
+    if config_dir:
+        base = Path(config_dir)
+    else:
+        base = get_base_dir() / "config"
+
+    config_files = [
+        "camera_config.yaml",
+        "detection_config.yaml",
+        "alert_config.yaml",
+    ]
 
     for filename in config_files:
-        filepath = Path(config_dir) / filename
+        filepath = base / filename
         if filepath.exists():
             with open(filepath, "r", encoding="utf-8") as f:
                 data = yaml.safe_load(f)
@@ -71,48 +89,41 @@ class FireDetectionSystem:
     def __init__(self, config: dict):
         self.config = config
         self.running = False
+        self._logger = logging.getLogger(__name__)
 
         # 구성 요소 초기화
         self.camera = CameraLoader(config)
         self.processor = ImageProcessor(config)
         self.detector = FireDetector(config)
-        self.phone_monitor = PhoneMonitor(config)
         self.alert_manager = AlertManager(config)
         self.roi_manager = ROIManager(config)
         self.perf_monitor = PerformanceMonitor()
         self.visualizer = Visualizer()
 
         self._prev_frame = None
-        self._phone_check_interval = 30  # 30초마다 스마트폰 상태 체크
-        self._last_phone_check = 0
-        self._phone_status_str = ""
+        self._display_counter = 0  # imshow 간격 제어용
 
     def start(self):
         """시스템을 시작한다."""
-        logger = logging.getLogger(__name__)
-        logger.info("설정 파일 로드 완료")
+        self._logger.info("설정 파일 로드 완료")
 
         # 카메라 연결
         if not self.camera.connect_with_retry():
-            logger.error("카메라 연결 실패. 시스템을 종료합니다.")
+            self._logger.error("카메라 연결 실패. 시스템을 종료합니다.")
             return
 
-        # 스마트폰 상태 확인
-        self._check_phone_status()
-
-        logger.info("화재 감지 시스템 시작...")
+        self._logger.info("화재 감지 시스템 시작...")
         self.running = True
 
         try:
             self._main_loop()
         except KeyboardInterrupt:
-            logger.info("\n사용자에 의해 시스템 종료")
+            self._logger.info("\n사용자에 의해 시스템 종료")
         finally:
             self.stop()
 
     def _main_loop(self):
         """메인 처리 루프."""
-        logger = logging.getLogger(__name__)
         frame_interval = 1.0 / self.config.get("camera", {}).get(
             "processing", {}
         ).get("target_fps", 15)
@@ -121,11 +132,15 @@ class FireDetectionSystem:
             loop_start = time.time()
             self.perf_monitor.tick()
 
-            # 1. 프레임 읽기
+            # 1. 프레임 읽기 (스레드 방식: 즉시 반환)
             ret, frame = self.camera.read_frame()
             if not ret:
-                if not self._handle_connection_loss():
-                    break
+                # 스레드가 아직 프레임을 준비하지 못한 경우 vs 실제 연결 끊김
+                if not self.camera.is_connected:
+                    if not self._handle_connection_loss():
+                        break
+                else:
+                    time.sleep(0.001)  # 프레임 대기
                 continue
 
             # 2. 전처리
@@ -137,7 +152,7 @@ class FireDetectionSystem:
 
             # 4. 화재 감지
             result = self.detector.detect(processed, self._prev_frame)
-            self._prev_frame = processed.copy()
+            self._prev_frame = processed
 
             # 5. 지연시간 기록
             latency_ms = (time.time() - loop_start) * 1000
@@ -157,21 +172,20 @@ class FireDetectionSystem:
                 self.alert_manager.handle_detection(
                     result.confidence, result.level, frame, roi_name
                 )
+
+            # 7. 비디오 버퍼 (warning 이상일 때만 프레임 저장 → 메모리 절약)
+            if result.level != "normal":
+                self.alert_manager.buffer_frame(frame)
+
+            # 8. 화면 표시 (2프레임에 1번만 갱신 → imshow 11ms 오버헤드 절감)
+            self._display_counter += 1
+            if self._display_counter % 2 == 0:
+                self._display_frame(frame, result)
             else:
-                self.alert_manager.event_logger.log_event(
-                    result.confidence, result.level
-                )
-
-            # 7. 비디오 버퍼
-            self.alert_manager.buffer_frame(frame)
-
-            # 8. 스마트폰 상태 주기적 확인
-            now = time.time()
-            if now - self._last_phone_check > self._phone_check_interval:
-                self._check_phone_status()
-
-            # 9. 화면 표시
-            self._display_frame(frame, result)
+                # 화면 갱신 생략 시에도 키 입력은 확인
+                key = cv2.waitKey(1) & 0xFF
+                if key == ord("q") or key == ord("Q"):
+                    self.running = False
 
             # FPS 제어
             elapsed = time.time() - loop_start
@@ -181,8 +195,10 @@ class FireDetectionSystem:
 
     def _display_frame(self, frame, result):
         """모니터링 화면을 표시한다."""
+        # draw_detection에서 copy=True로 1회만 복사, 이후는 in-place
         display = self.visualizer.draw_detection(
-            frame, result.contours, result.level, result.confidence
+            frame, result.contours, result.level, result.confidence,
+            yolo_detections=result.yolo_detections, copy=True,
         )
 
         if self.roi_manager.enabled:
@@ -194,7 +210,6 @@ class FireDetectionSystem:
             result.level,
             self.perf_monitor.fps,
             self.perf_monitor.avg_latency_ms,
-            self._phone_status_str,
         )
 
         cv2.imshow("Fire Detection System", display)
@@ -205,39 +220,22 @@ class FireDetectionSystem:
 
     def _handle_connection_loss(self) -> bool:
         """연결 끊김을 처리한다."""
-        logger = logging.getLogger(__name__)
-        logger.warning("카메라 연결 끊김. 재연결 시도 중...")
+        self._logger.warning("카메라 연결 끊김. 재연결 시도 중...")
 
         self.camera.release()
         if self.camera.connect_with_retry():
-            logger.info("카메라 재연결 성공")
+            self._logger.info("카메라 재연결 성공")
             return True
 
-        logger.error("카메라 재연결 실패")
+        self._logger.error("카메라 재연결 실패")
         return False
-
-    def _check_phone_status(self):
-        """스마트폰 상태를 확인한다."""
-        self._phone_status_str = self.phone_monitor.get_status_string()
-        status = self.phone_monitor.check_status()
-        self._last_phone_check = time.time()
-
-        logger = logging.getLogger(__name__)
-        if status.get("battery_level") is not None:
-            logger.info(
-                f"스마트폰 배터리: {status['battery_level']}%"
-            )
-
-        for warning in status.get("warnings", []):
-            logger.warning(warning)
 
     def stop(self):
         """시스템을 종료한다."""
-        logger = logging.getLogger(__name__)
         self.running = False
         self.camera.release()
         cv2.destroyAllWindows()
-        logger.info("화재 감지 시스템 종료")
+        self._logger.info("화재 감지 시스템 종료")
 
 
 def parse_args():
@@ -247,8 +245,8 @@ def parse_args():
     parser.add_argument(
         "--config",
         type=str,
-        default="config",
-        help="설정 파일 디렉토리 경로 (기본값: config)",
+        default="",
+        help="설정 파일 디렉토리 경로 (기본값: exe와 같은 폴더의 config/)",
     )
     return parser.parse_args()
 
@@ -256,8 +254,8 @@ def parse_args():
 def main():
     args = parse_args()
 
-    # 로그 디렉토리 생성
-    Path("logs").mkdir(exist_ok=True)
+    # 작업 디렉토리를 exe 기준으로 변경
+    os.chdir(get_exe_dir())
 
     setup_logging()
     logger = logging.getLogger(__name__)
