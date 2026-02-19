@@ -1,0 +1,43 @@
+alert:
+  # 알림 레벨 설정
+  levels:
+    warning:    # 60-70점
+      enabled: true
+      actions: ["log"]
+
+    alert:      # 70-85점
+      enabled: true
+      actions: ["log", "slack", "snapshot"]
+
+    critical:   # 85-100점
+      enabled: true
+      actions: ["log", "slack", "email", "sound", "video"]
+
+  # Slack 설정
+  slack:
+    enabled: false
+    webhook_url: "https://hooks.slack.com/services/YOUR/WEBHOOK/URL"
+    channel: "#fire-alerts"
+    mention_users: ["@safety-manager", "@facility-team"]
+
+  # Email 설정
+  email:
+    enabled: false
+    smtp_server: "smtp.gmail.com"
+    smtp_port: 587
+    sender: "alert@company.com"
+    password: "your-app-password"
+    recipients: ["safety@company.com", "manager@company.com"]
+
+  # 로컬 사운드
+  sound:
+    enabled: true
+    file_path: "assets/siren.wav"
+    volume: 0.8  # 0.0 ~ 1.0
+
+  # 로그 저장
+  logging:
+    save_snapshots: true
+    save_videos: true
+    video_duration: 20  # 전후 20초 녹화
+    log_directory: "logs/"

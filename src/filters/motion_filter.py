@@ -1,0 +1,100 @@
+"""Optical Flow 기반 2차 움직임 필터 모듈."""
+
+import logging
+from collections import deque
+from typing import Optional
+
+import cv2
+import numpy as np
+
+logger = logging.getLogger(__name__)
+
+
+class MotionFilter:
+    """Optical Flow로 화염의 불규칙한 움직임 패턴을 감지하는 필터.
+
+    출력: 움직임 점수 0-30점
+    """
+
+    def __init__(self, config: dict):
+        mf_cfg = config.get("motion_filter", {})
+        self.flow_threshold = mf_cfg.get("optical_flow_threshold", 2.5)
+        self.temporal_frames = mf_cfg.get("temporal_frames", 5)
+        self.pixel_change_threshold = mf_cfg.get("pixel_change_threshold", 0.15)
+
+        self._prev_grays: deque = deque(maxlen=self.temporal_frames)
+        self._flow_magnitudes: deque = deque(maxlen=self.temporal_frames)
+
+    def analyze(
+        self,
+        frame: np.ndarray,
+        prev_frame: np.ndarray,
+        fire_mask: Optional[np.ndarray] = None,
+    ) -> float:
+        """프레임 간 움직임을 분석한다.
+
+        Args:
+            frame: 현재 프레임 (BGR)
+            prev_frame: 이전 프레임 (BGR)
+            fire_mask: 색상 필터에서 생성된 화염 영역 마스크
+
+        Returns:
+            움직임 점수 (0-30)
+        """
+        curr_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        prev_gray = cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY)
+
+        # Farneback Optical Flow 계산
+        flow = cv2.calcOpticalFlowFarneback(
+            prev_gray, curr_gray, None,
+            pyr_scale=0.5, levels=3, winsize=15,
+            iterations=3, poly_n=5, poly_sigma=1.2,
+            flags=0,
+        )
+
+        magnitude, angle = cv2.cartToPolar(flow[..., 0], flow[..., 1])
+
+        # 화염 영역 내의 움직임만 분석
+        if fire_mask is not None and fire_mask.shape == magnitude.shape:
+            fire_region = fire_mask > 0
+            if np.any(fire_region):
+                region_magnitude = magnitude[fire_region]
+            else:
+                region_magnitude = magnitude.flatten()
+        else:
+            region_magnitude = magnitude.flatten()
+
+        mean_mag = float(np.mean(region_magnitude)) if region_magnitude.size > 0 else 0.0
+        self._flow_magnitudes.append(mean_mag)
+
+        # 시간적 변화 분석
+        self._prev_grays.append(curr_gray)
+
+        score = self._calculate_score(mean_mag)
+        return score
+
+    def _calculate_score(self, mean_magnitude: float) -> float:
+        """움직임 점수를 계산한다."""
+        score = 0.0
+
+        # 1. 움직임 강도 기반 점수 (0-15)
+        if mean_magnitude > self.flow_threshold:
+            intensity_score = min(
+                (mean_magnitude - self.flow_threshold) * 5.0, 15.0
+            )
+            score += intensity_score
+
+        # 2. 시간적 변동성 기반 점수 (0-15)
+        if len(self._flow_magnitudes) >= 3:
+            magnitudes = list(self._flow_magnitudes)
+            std_dev = float(np.std(magnitudes))
+            # 불규칙한 움직임일수록 높은 점수
+            variability_score = min(std_dev * 3.0, 15.0)
+            score += variability_score
+
+        return min(score, 30.0)
+
+    def reset(self):
+        """상태를 초기화한다."""
+        self._prev_grays.clear()
+        self._flow_magnitudes.clear()

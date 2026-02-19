@@ -1,0 +1,44 @@
+# 색상 기반 1차 필터 (HSV 색공간)
+color_filter:
+  hsv_ranges:
+    flame_orange:  # 주황색 화염
+      lower: [0, 100, 200]
+      upper: [20, 255, 255]
+    flame_yellow:  # 노란색 화염
+      lower: [20, 100, 200]
+      upper: [40, 255, 255]
+
+  min_area: 300        # 최소 픽셀 면적 (작은 노이즈 제거)
+  max_area: 50000      # 최대 면적 (전체 화면 조명 제거)
+
+# 움직임 기반 2차 필터
+motion_filter:
+  optical_flow_threshold: 2.5      # Flow 강도 임계값
+  temporal_frames: 5               # 연속 분석 프레임 수
+  pixel_change_threshold: 0.15     # 픽셀 변화율 (15%)
+
+# 형태 분석 3차 필터
+shape_filter:
+  irregularity_threshold: 20       # 경계선 불규칙성 지수
+  vertical_expansion_rate: 0.2     # 수직 확장 비율 (20%)
+
+# 최종 판정
+detection:
+  confidence_threshold: 70         # 화재 확정 임계값 (0-100)
+  debounce_seconds: 30             # 중복 알림 방지 시간
+  consecutive_frames: 3            # 연속 감지 필요 프레임
+
+# 전처리 설정
+preprocessing:
+  clahe_clip_limit: 2.0            # CLAHE 대비 강화
+  gaussian_blur_size: 5            # 가우시안 블러 커널 크기
+  denoise_strength: 10             # 노이즈 제거 강도
+
+# ROI (관심 영역) 설정
+roi:
+  enabled: false
+  regions:
+    - name: "작업대 구역"
+      coordinates: [100, 100, 500, 400]  # x1, y1, x2, y2
+    - name: "용접 구역"
+      coordinates: [520, 150, 900, 450]

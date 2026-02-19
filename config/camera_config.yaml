@@ -1,0 +1,23 @@
+camera:
+  type: smartphone
+
+  smartphone:
+    phone_ip: "192.168.0.105"      # 스마트폰 IP (필수 수정)
+    port: 8080                      # IP Webcam 포트
+    username: ""                    # 선택: 보안 설정 시
+    password: ""                    # 선택: 보안 설정 시
+    stream_type: "mjpeg"            # mjpeg / rtsp / snapshot
+
+  processing:
+    target_resolution: [640, 480]   # 처리용 해상도 (속도 최적화)
+    target_fps: 15                  # 처리 FPS (배터리 절약)
+    buffer_size: 1                  # 최소 버퍼 (지연 감소)
+
+  reconnection:
+    max_attempts: 10                # 최대 재연결 시도
+    retry_interval: 3               # 재시도 간격 (초)
+
+  monitoring:
+    check_battery: true             # 배터리 모니터링 활성화
+    battery_warning_threshold: 20   # 경고 임계값 (%)
+    temp_warning_threshold: 45      # 과열 경고 (°C)
