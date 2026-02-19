@@ -51,3 +51,9 @@ build/
 
 # Platform tools (download separately)
 platform-tools/
+
+# Models (download separately)
+models/*.pt
+
+# Build spec (local paths)
+fire_detection.spec

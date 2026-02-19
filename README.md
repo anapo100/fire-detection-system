@@ -227,16 +227,25 @@ fire-detection-system/
 
 ```bash
 # 1. 저장소 클론
-git clone https://github.com/your-repo/fire-detection-system.git
+git clone https://github.com/anapo100/fire-detection-system.git
 cd fire-detection-system
 
-# 2. 의존성 설치
+# 2. YOLO 모델 다운로드 (models/ 폴더에 배치)
+# yolov8n 기반 fire/smoke 탐지 모델 (6.2MB)
+mkdir models
+# 직접 학습한 모델 또는 사전학습 모델을 models/yolov8n-fire.pt 경로에 배치
+
+# 3. ADB 설치 (USB 카메라 사용 시)
+# https://developer.android.com/tools/releases/platform-tools 에서 다운로드
+# platform-tools/ 폴더에 압축 해제
+
+# 4. 의존성 설치
 pip install opencv-python numpy PyYAML requests pillow
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
 pip install ultralytics
 pip install slack-sdk  # 선택: Slack 알림용
 
-# 3. GPU 확인
+# 5. GPU 확인
 python -c "import torch; print(f'CUDA: {torch.cuda.is_available()}, GPU: {torch.cuda.get_device_name(0)}')"
 ```
 
