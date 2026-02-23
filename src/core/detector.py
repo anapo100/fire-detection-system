@@ -84,8 +84,15 @@ class FireDetector:
 
         det_cfg = config.get("detection", {})
         self.confidence_threshold = det_cfg.get("confidence_threshold", 70)
-        self.debounce_seconds = det_cfg.get("debounce_seconds", 30)
         self.consecutive_frames = det_cfg.get("consecutive_frames", 3)
+
+        # 레벨별 디바운스 (초)
+        levels_cfg = config.get("alert", {}).get("levels", {})
+        self._debounce_by_level = {
+            "warning": levels_cfg.get("warning", {}).get("debounce_seconds", 15),
+            "alert": levels_cfg.get("alert", {}).get("debounce_seconds", 5),
+            "critical": levels_cfg.get("critical", {}).get("debounce_seconds", 0),
+        }
 
         # 5개 필터 초기화
         self.color_filter = ColorFilter(config)
@@ -96,7 +103,11 @@ class FireDetector:
 
         self._detection_history: deque = deque(maxlen=30)
         self._consecutive_count = 0
-        self._last_alert_time: float = 0
+        self._last_alert_time: dict = {
+            "warning": 0.0,
+            "alert": 0.0,
+            "critical": 0.0,
+        }
 
         # Optical Flow 2프레임 간격 실행 (성능 최적화)
         self._frame_count = 0
@@ -225,7 +236,15 @@ class FireDetector:
         return "normal"
 
     def should_alert(self, result: DetectionResult) -> bool:
-        """알림을 발송해야 하는지 판단한다."""
+        """알림을 발송해야 하는지 판단한다.
+
+        레벨별 독립 디바운스를 적용한다:
+          - warning:  15초 (주의 모니터링)
+          - alert:     5초 (화재 의심, 빠른 재알림)
+          - critical:  0초 (화재 확정, 즉시 알림)
+
+        상위 레벨 전환 시 디바운스를 무시하여 즉시 알림을 보낸다.
+        """
         if result.level == "normal":
             return False
 
@@ -233,17 +252,22 @@ class FireDetector:
             return False
 
         now = time.time()
-        if now - self._last_alert_time < self.debounce_seconds:
+        level = result.level
+        debounce = self._debounce_by_level.get(level, 15)
+        last_time = self._last_alert_time.get(level, 0.0)
+
+        # 디바운스가 0이면 항상 알림 (critical)
+        if debounce > 0 and (now - last_time) < debounce:
             return False
 
-        self._last_alert_time = now
+        self._last_alert_time[level] = now
         return True
 
     def reset(self):
         """감지 상태를 초기화한다."""
         self._detection_history.clear()
         self._consecutive_count = 0
-        self._last_alert_time = 0
+        self._last_alert_time = {"warning": 0.0, "alert": 0.0, "critical": 0.0}
         self.motion_filter.reset()
         self.shape_filter.reset()
         self.smoke_filter.reset()

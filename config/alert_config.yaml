@@ -1,17 +1,20 @@
 alert:
   # 알림 레벨 설정
   levels:
-    warning:    # 60-70점
+    warning:    # 30-44점
       enabled: true
       actions: ["log"]
+      debounce_seconds: 15       # 주의 단계: 15초 간격 재알림
 
-    alert:      # 70-85점
+    alert:      # 45-64점
       enabled: true
       actions: ["log", "slack", "snapshot"]
+      debounce_seconds: 5        # 화재 의심: 5초 간격 빠른 재알림
 
-    critical:   # 85-100점
+    critical:   # 65-100점
       enabled: true
       actions: ["log", "slack", "email", "sound", "video"]
+      debounce_seconds: 0        # 화재 확정: 즉시 알림 (디바운스 없음)
 
   # # Slack 설정
   # slack:

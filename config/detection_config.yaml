@@ -46,8 +46,8 @@ yolo_filter:
 # 최종 판정
 detection:
   confidence_threshold: 70         # 화재 확정 임계값 (0-100)
-  debounce_seconds: 30             # 중복 알림 방지 시간
   consecutive_frames: 3            # 연속 감지 필요 프레임
+  # 디바운스는 alert_config.yaml의 레벨별 debounce_seconds로 관리
 
 # 전처리 설정
 preprocessing:
