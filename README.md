@@ -308,7 +308,7 @@ yolo_filter:
 
 detection:
   consecutive_frames: 3      # 연속 3프레임 감지 필요
-  debounce_seconds: 30       # 중복 알림 쿨다운
+  # 디바운스는 alert_config.yaml의 레벨별 debounce_seconds로 관리
 ```
 
 ### `config/alert_config.yaml`
@@ -316,9 +316,9 @@ detection:
 ```yaml
 alert:
   levels:
-    warning:   { threshold: 30, actions: ["log"] }
-    alert:     { threshold: 45, actions: ["log", "slack", "snapshot"] }
-    critical:  { threshold: 65, actions: ["log", "slack", "email", "sound", "video"] }
+    warning:   { threshold: 30, actions: ["log"], debounce_seconds: 15 }
+    alert:     { threshold: 45, actions: ["log", "slack", "snapshot"], debounce_seconds: 5 }
+    critical:  { threshold: 65, actions: ["log", "slack", "email", "sound", "video"], debounce_seconds: 0 }
 
   slack:
     enabled: true
@@ -346,7 +346,7 @@ alert:
 
 ### 3단계: 시스템 수준
 
-- **알림 디바운스**: 30초 중복 알림 쿨다운
+- **알림 디바운스**: 레벨별 차등 적용 (Warning 15초 / Alert 5초 / Critical 즉시)
 - **ROI 영역**: 관심 영역 밖 감지 무시
 - **단계적 대응**: 낮은 레벨은 로그만 기록 (알림 스팸 방지)
 
